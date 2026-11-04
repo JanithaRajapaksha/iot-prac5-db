@@ -134,8 +134,24 @@ mariadb -u iot_reader -p'ReaderSecurePass_Et4242_2026!' iot_lab -e "SELECT COUNT
 *Observation:* Stored count equals exactly `117`.
 *Explanation:* $\text{Total elapsed time (122 s)} \div \text{Interval (1 s)} = 122\text{ cycles}$. $117\text{ stored} + 5\text{ failed reads} + 0\text{ rejected} = 122$. The 5 failed reads correspond to stochastic dropouts in `SimulatedSensor` (`fail_rate = 0.05`).
 
-##### Step e: Physical DHT11 Comparison
-*(On Raspberry Pi)* Run `python logger.py --device pi-01 --sensor dht --interval 2 --batch 10` and compare the proportion of failed checksum reads with the 5% simulated dropout rate.
+##### Step e: Physical DHT11 Execution on Raspberry Pi
+When migrating to the Raspberry Pi with a physical DHT11 sensor:
+1. Wire the sensor:
+   - **VCC:** Pin 1 (3.3V)
+   - **GND:** Pin 6 (GND)
+   - **DATA:** Pin 7 (GPIO 4 / D4)
+2. Install hardware prerequisites:
+   ```bash
+   sudo apt install -y libgpiod2
+   pip install adafruit-circuitpython-dht
+   ```
+3. Run the logger with the physical sensor option:
+   ```bash
+   python logger.py --device pi-01 --sensor dht --pin D4 --interval 2 --batch 10
+   ```
+   - Automatically uses `use_pulseio=False` to prevent Linux kernel GPIO timing locks.
+   - Gracefully handles standard checksum/timing dropouts (`RuntimeError`) without crashing.
+   - Calls `sensor.exit()` in a `finally` block on exit to release the GPIO line back to the OS.
 
 ---
 
