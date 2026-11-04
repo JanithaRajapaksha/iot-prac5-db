@@ -1,14 +1,37 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # ET4242 Internet of Things - Practical 05: Python and MySQL Lab Automation Setup
-# Author: Automated Lab Setup
 # Target Environment: Ubuntu / Debian Linux (Laptop or Raspberry Pi)
+# Usage: ./setup.sh [--venv]
 # ==============================================================================
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+# Parse CLI options
+CREATE_VENV=false
+for arg in "$@"; do
+    case "$arg" in
+        --venv|-v)
+            CREATE_VENV=true
+            ;;
+        --help|-h)
+            echo "Usage: ./setup.sh [--venv]"
+            echo ""
+            echo "Options:"
+            echo "  --venv, -v    Create and configure a local Python virtual environment (.venv)."
+            echo "                (Default: skip venv creation and use current Python environment)"
+            echo "  --help, -h    Show this help message."
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $arg (Use --help for usage)"
+            exit 1
+            ;;
+    esac
+done
 
 echo "=================================================================="
 echo "    ET4242 Practical 05: Automated Environment & Database Setup   "
@@ -69,14 +92,30 @@ FLUSH PRIVILEGES;
 "
 echo ">> Synchronized MariaDB user passwords with db.ini."
 
-# 5. Set Up Python Virtual Environment
-echo "[5/6] Setting up Python virtual environment (.venv)..."
-if [ ! -d ".venv" ]; then
-    python3 -m venv .venv
+# 5. Python Environment & Dependency Installation
+if [ "$CREATE_VENV" = true ]; then
+    echo "[5/6] Creating Python virtual environment (.venv) as requested (--venv)..."
+    if [ ! -d ".venv" ]; then
+        python3 -m venv .venv
+    fi
+    source .venv/bin/activate
+    PYTHON_CMD="python"
+    PIP_CMD="pip"
+else
+    echo "[5/6] Skipping .venv creation (default)."
+    if [ -n "$VIRTUAL_ENV" ]; then
+        echo ">> Detected already-active environment: $VIRTUAL_ENV"
+        PYTHON_CMD="python"
+        PIP_CMD="pip"
+    else
+        echo ">> Using current Python environment (pass '--venv' if you want a local .venv created)."
+        PYTHON_CMD="python3"
+        PIP_CMD="python3 -m pip"
+    fi
 fi
-source .venv/bin/activate
-pip install --upgrade pip --quiet
-pip install -r "$SCRIPT_DIR/requirements.txt" --quiet
+
+echo ">> Installing/verifying dependencies from requirements.txt..."
+$PIP_CMD install -r "$SCRIPT_DIR/requirements.txt" --quiet
 
 # 6. Ensure db.ini permissions (chmod 600)
 echo "[6/6] Securing credentials file db.ini..."
@@ -85,7 +124,7 @@ chmod 600 "$SCRIPT_DIR/db.ini"
 # Verify connectivity
 echo ""
 echo ">> Testing database connections..."
-python -c "
+$PYTHON_CMD -c "
 import db
 conn_w = db.get_connection('writer')
 conn_r = db.get_connection('reader')

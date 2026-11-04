@@ -29,14 +29,19 @@ To replicate the entire environment on your laptop in seconds, a self-contained 
 #### Running Automated Setup:
 ```bash
 chmod +x setup.sh
+
+# Default: configures database, syncs db.ini passwords, and installs packages in current Python environment
 ./setup.sh
+
+# Optional: if you want a dedicated local virtual environment (.venv) created:
+./setup.sh --venv
 ```
 This automated script executes:
 1. Verification of MariaDB server and client packages.
 2. Starting and enabling `mariadb.service`.
 3. Sudoers rule creation (`/etc/sudoers.d/mariadb-service`) allowing `systemctl stop/start mariadb` without password prompts for fault injection.
 4. Database initialization via [`init_db.sql`](file:///home/janitha/iot_prac/db/init_db.sql) (creates database, tables, accounts `iot_writer` and `iot_reader`, and grants).
-5. Virtual environment creation ([`.venv`](file:///home/janitha/iot_prac/db/.venv)) and dependency installation (`pip install -r requirements.txt`).
+5. Dependency installation (`pip install -r requirements.txt`) in current Python or in `.venv` if `--venv` is specified.
 6. Credentials file permission configuration (`chmod 600 db.ini`).
 7. Connection verification for both `writer` and `reader` roles.
 
