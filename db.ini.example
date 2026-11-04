@@ -9,3 +9,4 @@ host = localhost
 user = iot_reader
 password = <reader-password>
 database = iot_lab
+
