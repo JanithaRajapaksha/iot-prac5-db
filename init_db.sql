@@ -26,21 +26,11 @@ CREATE TABLE sensor_readings (
     CONSTRAINT chk_hum CHECK (humidity_percent BETWEEN 0 AND 100)
 ) ENGINE=InnoDB;
 
--- Create users with matching credentials configured in db.ini
-CREATE OR REPLACE USER 'iot_writer'@'localhost' IDENTIFIED BY 'WriterSecurePass_Et4242_2026!';
-CREATE OR REPLACE USER 'iot_reader'@'localhost' IDENTIFIED BY 'ReaderSecurePass_Et4242_2026!';
-
-GRANT SELECT ON iot_lab.devices TO 'iot_writer'@'localhost';
-GRANT SELECT, INSERT, UPDATE ON iot_lab.sensor_readings TO 'iot_writer'@'localhost';
-GRANT SELECT ON iot_lab.* TO 'iot_reader'@'localhost';
-
 -- Benchmark table for Part 4
 CREATE TABLE IF NOT EXISTS iot_lab.bench_readings LIKE iot_lab.sensor_readings;
-GRANT SELECT, INSERT, UPDATE, DELETE, ALTER, INDEX ON iot_lab.bench_readings TO 'iot_writer'@'localhost';
-
-FLUSH PRIVILEGES;
 
 -- Seed initial device
 INSERT INTO devices (device_name, location, sensor_type)
-VALUES ('pi-01', 'Laboratory', 'DHT11 or simulated');
+VALUES ('pi-01', 'Laboratory', 'DHT11 or simulated')
+ON DUPLICATE KEY UPDATE device_name=device_name;
 

@@ -40,9 +40,34 @@ if [ ! -f "$SUDOERS_FILE" ]; then
 fi
 echo ">> Sudoers configured at $SUDOERS_FILE."
 
-# 4. Initialize Database Schema, Constraints & Least-Privilege Users
-echo "[4/6] Initializing MariaDB schema and user privileges..."
+# 4. Initialize Database Schema & Sync Passwords from db.ini
+echo "[4/6] Initializing schema and syncing passwords from db.ini..."
+if [ ! -f "$SCRIPT_DIR/db.ini" ]; then
+    echo ">> db.ini not found. Creating from db.ini.example..."
+    cp "$SCRIPT_DIR/db.ini.example" "$SCRIPT_DIR/db.ini"
+fi
+chmod 600 "$SCRIPT_DIR/db.ini"
+
+# Read passwords from db.ini (Single Source of Truth)
+WRITER_PASS=$(python3 -c "import configparser; c=configparser.ConfigParser(); c.read('$SCRIPT_DIR/db.ini'); print(c['writer']['password'])")
+READER_PASS=$(python3 -c "import configparser; c=configparser.ConfigParser(); c.read('$SCRIPT_DIR/db.ini'); print(c['reader']['password'])")
+
+# Run schema DDL
 sudo mariadb < "$SCRIPT_DIR/init_db.sql"
+
+# Configure MariaDB users with the passwords from db.ini
+sudo mariadb -e "
+CREATE OR REPLACE USER 'iot_writer'@'localhost' IDENTIFIED BY '$WRITER_PASS';
+CREATE OR REPLACE USER 'iot_reader'@'localhost' IDENTIFIED BY '$READER_PASS';
+
+GRANT SELECT ON iot_lab.devices TO 'iot_writer'@'localhost';
+GRANT SELECT, INSERT, UPDATE ON iot_lab.sensor_readings TO 'iot_writer'@'localhost';
+GRANT SELECT ON iot_lab.* TO 'iot_reader'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE, ALTER, INDEX ON iot_lab.bench_readings TO 'iot_writer'@'localhost';
+
+FLUSH PRIVILEGES;
+"
+echo ">> Synchronized MariaDB user passwords with db.ini."
 
 # 5. Set Up Python Virtual Environment
 echo "[5/6] Setting up Python virtual environment (.venv)..."
