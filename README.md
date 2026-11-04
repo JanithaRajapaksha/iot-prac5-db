@@ -115,9 +115,31 @@ mariadb -u iot_reader -p'ReaderSecurePass_Et4242_2026!' iot_lab -e "SELECT * FRO
 ```
 
 ##### Step b & c: Run Logger for at Least Two Minutes
-Run in terminal:
+
+> [!NOTE]
+> **Specifying Sensor Mode (`--sensor sim` vs `--sensor dht`):**
+> - **Laptop Testing (No hardware / Simulated):**
+>   Use `--sensor sim` (or omit it, since `sim` is the default):
+>   ```bash
+>   python logger.py --device pi-01 --sensor sim --interval 1 --batch 10
+>   ```
+> - **Raspberry Pi (Physical DHT11 connected):**
+>   Use `--sensor dht` and specify the GPIO pin (`--pin D4`):
+>   ```bash
+>   python logger.py --device pi-01 --sensor dht --pin D4 --interval 2 --batch 10
+>   ```
+
+| CLI Argument | Choices / Default | Description |
+| :--- | :--- | :--- |
+| `--sensor` | `sim` (default) \| `dht` | Selects between the software simulator (`sim`) and physical DHT11 hardware (`dht`). |
+| `--pin` | `D4` (default) | Board GPIO pin name when using `--sensor dht` (e.g. `D4` for GPIO 4). |
+| `--interval`| `2.0` (default) | Sampling frequency in seconds between successive sensor reads. |
+| `--batch` | `10` (default) | Number of rows buffered in memory before committing to MariaDB in a single transaction. |
+| `--device` | `pi-01` (default) | Identifier of the registered device in the MariaDB `devices` table. |
+
+Run in terminal on your laptop:
 ```bash
-python logger.py --device pi-01 --interval 1 --batch 10
+python logger.py --device pi-01 --sensor sim --interval 1 --batch 10
 ```
 - Observe console output displaying: `Stored 10 rows (total 10)`, `Stored 10 rows (total 20)`, etc.
 - After 2 minutes (120 seconds), press `Ctrl+C`.
