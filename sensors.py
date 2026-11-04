@@ -14,19 +14,62 @@ class SimulatedSensor:
         self.h = min(max(self.h + random.gauss(0, 0.8), 30.0), 95.0)
         return round(self.t, 2), round(self.h, 2)
 
+    def exit(self):
+        """No-op for simulated sensor."""
+        pass
+
+    def close(self):
+        self.exit()
+
 
 class DHTSensor:
-    """DHT11 via the Adafruit library (install as in Practical 03)."""
+    """Hardware DHT11 sensor reader using Adafruit CircuitPython DHT library."""
 
     def __init__(self, pin_name="D4"):
-        import board
-        import adafruit_dht
+        try:
+            import board
+            import adafruit_dht
+        except ImportError as exc:
+            raise RuntimeError(
+                "Packages 'board' and 'adafruit-circuitpython-dht' are required on the Raspberry Pi.\n"
+                "Install them using:\n"
+                "  sudo apt install -y libgpiod2\n"
+                "  pip install adafruit-circuitpython-dht"
+            ) from exc
 
-        self.dev = adafruit_dht.DHT11(getattr(board, pin_name))
+        pin = getattr(board, pin_name, None)
+        if pin is None:
+            raise ValueError(f"Pin '{pin_name}' not found on board module.")
+
+        self.pin_name = pin_name
+        # use_pulseio=False prevents timing lockouts on Linux GPIO
+        self.dev = adafruit_dht.DHT11(pin, use_pulseio=False)
+        print(f"Initialized physical DHT11 on GPIO pin '{pin_name}' (use_pulseio=False).")
 
     def read(self):
+        """Return (temperature_c, humidity_percent) or None if read fails."""
         try:
-            return float(self.dev.temperature), float(self.dev.humidity)
-        except (RuntimeError, TypeError):
+            temp = self.dev.temperature
+            hum = self.dev.humidity
+            # Only return data if both temperature and humidity returned valid numbers
+            if temp is not None and hum is not None:
+                return round(float(temp), 2), round(float(hum), 2)
+            return None
+        except RuntimeError:
+            # Catch standard DHT11 timing / checksum errors to prevent crashes
+            return None
+        except Exception as err:
+            print(f"Unexpected DHT sensor read error: {err}")
             return None
 
+    def exit(self):
+        """Release the GPIO pin back to the OS to avoid 'Unable to set line' errors."""
+        if hasattr(self, "dev") and self.dev is not None:
+            try:
+                self.dev.exit()
+                print(f"Released GPIO pin for '{self.pin_name}'.")
+            except Exception as err:
+                print(f"Error releasing GPIO pin: {err}")
+
+    def close(self):
+        self.exit()
