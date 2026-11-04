@@ -1,0 +1,12 @@
+# Credentials - NEVER commit secrets
+db.ini
+
+# Python virtual environment & cache
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary / OS files
+.DS_Store
+*.tmp
