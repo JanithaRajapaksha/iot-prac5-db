@@ -1,5 +1,7 @@
 # Credentials - NEVER commit secrets
 db.ini
+web.env
+*.env
 
 # Python virtual environment & cache
 .venv/
