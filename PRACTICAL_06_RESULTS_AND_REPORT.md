@@ -164,3 +164,443 @@
     2. *In-Memory Caching (Redis):* Cache the latest state in Redis so queries do not hit MariaDB on every tick.
     3. *Pub/Sub Gateway:* A WebSocket/SSE cluster subscribes to topics requested by connected viewers and fans out messages dynamically.
     4. *Time-Series Storage:* Historical data is written to a specialized time-series database (e.g., TimescaleDB / InfluxDB) in micro-batches rather than individual relational inserts.
+
+
+---
+
+### 7. Step-by-Step Execution Guide & Command Reference
+
+#### Step 1: Verify MariaDB and Data Access (Procedure 1)
+
+##### 1.1 Check MariaDB Server Status
+```bash
+sudo systemctl status mariadb
+```
+**Expected Output:**
+```text
+● mariadb.service - MariaDB database server
+     Loaded: loaded (/usr/lib/systemd/system/mariadb.service; enabled; preset: enabled)
+     Active: active (running)
+```
+
+##### 1.2 Inspect Database Records from Practical 05
+```bash
+sudo mariadb -e "SELECT d.device_name, COUNT(*) AS rows_stored, MAX(r.recorded_at) AS newest FROM iot_lab.sensor_readings r JOIN iot_lab.devices d ON d.id = r.device_id GROUP BY d.device_name;"
+```
+**Expected Output:**
+```text
++-------------+-------------+----------------------------+
+| device_name | rows_stored | newest                     |
++-------------+-------------+----------------------------+
+| pi-01       |         439 | 2026-11-04 09:43:33.066000 |
+| pi-02       |         104 | 2026-11-04 09:43:31.729000 |
++-------------+-------------+----------------------------+
+```
+
+##### 1.3 Test Read-Only (`iot_reader`) Connection
+```bash
+python3 -c "from db import get_connection; c = get_connection('reader'); print('Reader connected:', c.is_connected()); c.close()"
+```
+**Expected Output:**
+```text
+Reader connected: True
+```
+
+---
+
+#### Step 2: Part 1 – Test Data-Access Layer & JSON API Endpoints
+
+##### 2.1 Start the Development Server
+In **Terminal 1**:
+```bash
+python3 app.py
+```
+**Expected Output:**
+```text
+ * Serving Flask app 'app'
+ * Debug mode: off
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://10.220.214.36:5000
+Press CTRL+C to quit
+```
+
+In **Terminal 2**, run the curl verification commands:
+
+##### 2.2 Health Check Endpoint
+```bash
+curl -i "http://localhost:5000/api/health"
+```
+**Expected Output:**
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{"status":"ok"}
+```
+
+##### 2.3 Device Inventory Endpoint
+```bash
+curl -i "http://localhost:5000/api/devices"
+```
+**Expected Output:**
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+[
+  {"device_name":"pi-01","location":"Laboratory","sensor_type":"DHT11 or simulated"},
+  {"device_name":"pi-02","location":"Server Room","sensor_type":"Simulated"}
+]
+```
+
+##### 2.4 Latest Reading (Valid Device)
+```bash
+curl -i "http://localhost:5000/api/latest?device=pi-01"
+```
+**Expected Output:**
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "age_s": 12.4,
+  "device": "pi-01",
+  "humidity_percent": 53.07,
+  "recorded_at": "2026-11-04T09:43:33.066Z",
+  "temperature_c": 35.28
+}
+```
+
+##### 2.5 Historical Series (Limited to 5 readings)
+```bash
+curl -i "http://localhost:5000/api/readings?device=pi-01&limit=5"
+```
+**Expected Output:**
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+[
+  {"device":"pi-01","humidity_percent":54.51,"recorded_at":"2026-11-04T09:43:29.066Z","temperature_c":35.52},
+  {"device":"pi-01","humidity_percent":53.0,"recorded_at":"2026-11-04T09:43:30.066Z","temperature_c":35.68},
+  {"device":"pi-01","humidity_percent":51.57,"recorded_at":"2026-11-04T09:43:31.066Z","temperature_c":35.59},
+  {"device":"pi-01","humidity_percent":52.39,"recorded_at":"2026-11-04T09:43:32.066Z","temperature_c":35.65},
+  {"device":"pi-01","humidity_percent":53.07,"recorded_at":"2026-11-04T09:43:33.066Z","temperature_c":35.28}
+]
+```
+
+##### 2.6 Aggregate Statistics Endpoint
+```bash
+curl -i "http://localhost:5000/api/stats?device=pi-01&minutes=60"
+```
+**Expected Output:**
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "avg_humidity_percent": 58.42,
+  "avg_temperature_c": 28.65,
+  "device": "pi-01",
+  "max_temperature_c": 35.68,
+  "min_temperature_c": 24.12,
+  "minutes": 60,
+  "n": 60
+}
+```
+
+##### 2.7 Unknown Device Check (HTTP 404)
+```bash
+curl -i "http://localhost:5000/api/latest?device=unknown"
+```
+**Expected Output:**
+```http
+HTTP/1.1 404 NOT FOUND
+Content-Type: application/json
+
+{"error":"no readings for this device"}
+```
+
+##### 2.8 Invalid Type Parameter Validation (HTTP 400)
+```bash
+curl -i "http://localhost:5000/api/readings?limit=abc"
+```
+**Expected Output:**
+```http
+HTTP/1.1 400 BAD REQUEST
+Content-Type: application/json
+
+{"error":"limit must be an integer"}
+```
+
+##### 2.9 Range Bound Parameter Validation (HTTP 400)
+```bash
+curl -i "http://localhost:5000/api/readings?limit=100000"
+```
+**Expected Output:**
+```http
+HTTP/1.1 400 BAD REQUEST
+Content-Type: application/json
+
+{"error":"limit must be between 1 and 1000"}
+```
+
+##### 2.10 SQL Injection Attack Simulation (HTTP 400)
+```bash
+curl -i "http://localhost:5000/api/latest?device=x%27%20OR%201%3D1--%20"
+```
+**Expected Output:**
+```http
+HTTP/1.1 400 BAD REQUEST
+Content-Type: application/json
+
+{"error":"invalid device name"}
+```
+
+##### 2.11 Database Fault Tolerance Test (HTTP 503)
+Stop MariaDB and make a request:
+```bash
+sudo systemctl stop mariadb
+curl -i "http://localhost:5000/api/health"
+```
+**Expected Output:**
+```http
+HTTP/1.1 503 SERVICE UNAVAILABLE
+Content-Type: application/json
+
+{"error":"database unavailable"}
+```
+Restart MariaDB:
+```bash
+sudo systemctl start mariadb
+curl -i "http://localhost:5000/api/health"
+```
+*(Confirms automatic recovery returning `200 OK`)*.
+
+---
+
+#### Step 3: Part 2 – Responsive Dashboard & Freshness
+
+##### 3.1 Find the Raspberry Pi IP Address
+```bash
+ip -4 -br a
+```
+**Expected Output:**
+```text
+wlan0            UP             10.220.214.36/24
+```
+
+##### 3.2 View Dashboard in Browser
+* Open `http://10.220.214.36:5000/` from any browser on the same network.
+* **Expected UI View:**
+  * Header showing `Device: pi-01 | Status: updated HH:MM:SS`.
+  * Real-time temperature & humidity cards.
+  * Dual-axis Chart.js updating every 5 seconds without page reloads.
+
+##### 3.3 Test Freshness (Stale-Data Banner)
+Stop the Practical 05 data logger (`logger.py`). After **30 seconds**, the browser will automatically render:
+```text
+Data is stale: last reading 31 s ago
+```
+*(Yellow warning banner appears above grid)*.
+
+---
+
+#### Step 4: Part 3 – Secure Actuator Control (LED)
+
+##### 4.1 Launch with Hardware Control Enabled
+```bash
+export CONTROL_TOKEN="secret12345"
+export ENABLE_LED=1
+python3 app.py
+```
+
+##### 4.2 Test Unauthorized Request (Missing Token -> 401)
+```bash
+curl -i -X POST http://localhost:5000/api/led \
+  -H "Content-Type: application/json" \
+  -d '{"state":"on"}'
+```
+**Expected Output:**
+```http
+HTTP/1.1 401 UNAUTHORIZED
+Content-Type: application/json
+
+{"error":"unauthorised"}
+```
+
+##### 4.3 Test Wrong Token (-> 401)
+```bash
+curl -i -X POST http://localhost:5000/api/led \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer wrongtoken" \
+  -d '{"state":"on"}'
+```
+**Expected Output:**
+```http
+HTTP/1.1 401 UNAUTHORIZED
+Content-Type: application/json
+
+{"error":"unauthorised"}
+```
+
+##### 4.4 Test Invalid State Command (-> 400)
+```bash
+curl -i -X POST http://localhost:5000/api/led \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer secret12345" \
+  -d '{"state":"blink"}'
+```
+**Expected Output:**
+```http
+HTTP/1.1 400 BAD REQUEST
+Content-Type: application/json
+
+{"error":"state must be 'on' or 'off'"}
+```
+
+##### 4.5 Test Valid Control Request (Turn LED ON -> 200)
+```bash
+curl -i -X POST http://localhost:5000/api/led \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer secret12345" \
+  -d '{"state":"on"}'
+```
+**Expected Output:**
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{"state":"on"}
+```
+
+##### 4.6 Inspect Current Actuator State
+```bash
+curl -i "http://localhost:5000/api/led"
+```
+**Expected Output:**
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{"state":"on"}
+```
+
+##### 4.7 Observe Network Insecurity (Plaintext Sniffing via tcpdump)
+In a separate terminal, monitor traffic while sending a valid request:
+```bash
+sudo tcpdump -i any -A "tcp port 5000"
+```
+**Expected Packet Capture Observation:**
+```text
+POST /api/led HTTP/1.1
+Host: localhost:5000
+Authorization: Bearer secret12345
+Content-Type: application/json
+
+{"state":"on"}
+```
+*(Demonstrates that plain HTTP exposes Bearer tokens across the local network)*.
+
+---
+
+#### Step 5: Part 4 – Load Measurement & systemd Service
+
+##### 5.1 Run Load Benchmark Across Configurations (500 Requests, Concurrency 10)
+Run the automated benchmark runner:
+```bash
+# 1. Flask Development Server (port 5000)
+python3 bench_load.py http://127.0.0.1:5000/api/latest?device=pi-01 -n 500 -c 10
+
+# 2. Gunicorn WSGI Server (1 worker, 4 threads, port 8080)
+python3 bench_load.py http://127.0.0.1:8080/api/latest?device=pi-01 -n 500 -c 10
+
+# 3. Gunicorn WSGI Server (2 workers, sync, port 8080)
+python3 bench_load.py http://127.0.0.1:8080/api/latest?device=pi-01 -n 500 -c 10
+```
+**Expected Benchmark Results:**
+```text
+1. Flask Dev Server:      ~86.86 requests/s | Mean: 114.52 ms | p95: 162.94 ms
+2. Gunicorn (1w, 4t):     ~82.99 requests/s | Mean: 119.24 ms | p95: 139.41 ms
+3. Gunicorn (2w, sync):   ~45.13 requests/s | Mean: 220.63 ms | p95: 222.65 ms
+```
+
+##### 5.2 Deploy as a systemd Background Service
+Install and activate the systemd service:
+```bash
+sudo cp iot-web.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now iot-web
+sudo systemctl status iot-web
+```
+**Expected Output:**
+```text
+● iot-web.service - IoT web dashboard
+     Loaded: loaded (/etc/systemd/system/iot-web.service; enabled)
+     Active: active (running)
+   Main PID: 6124 (gunicorn)
+```
+
+##### 5.3 Test Process Crash Recovery (`kill -9`)
+```bash
+sudo kill -9 $(systemctl show -p MainPID --value iot-web)
+sleep 2
+systemctl status iot-web
+```
+**Expected Output:**
+```text
+Active: active (running)
+Main PID: 6189 (gunicorn)
+```
+*(Confirms `Restart=on-failure` restored the server under a new PID within 2 seconds)*.
+
+---
+
+#### Step 6: Part 5 – Extension Verifications
+
+##### 6.1 Extension (b): Connection Pooling Benchmark
+Compare against baseline by enabling connection pooling (`USE_POOL=1`):
+```bash
+USE_POOL=1 gunicorn --workers 1 --threads 4 --bind 0.0.0.0:8080 app:app &
+python3 bench_load.py http://127.0.0.1:8080/api/latest?device=pi-01 -n 500 -c 10
+```
+**Expected Output:**
+```text
+Total time taken:     2.549 seconds
+Requests per second:  196.16 [#/sec]
+Time per request:     50.76 [ms] (mean)
+95% percentile:       33.31 [ms]
+```
+*(Demonstrates a **2.36× throughput increase** and cuts latency by more than **50%**)*.
+
+##### 6.2 Extension (e): Actuator Abuse Protection
+Send 6 rapid unauthorized requests to trigger rate limiting:
+```bash
+for i in {1..6}; do
+  curl -s -o /dev/null -w "Attempt $i: HTTP %{http_code}\n" -X POST http://localhost:5000/api/led \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer badtoken" \
+    -d '{"state":"on"}'
+done
+```
+**Expected Output:**
+```text
+Attempt 1: HTTP 401
+Attempt 2: HTTP 401
+Attempt 3: HTTP 401
+Attempt 4: HTTP 401
+Attempt 5: HTTP 401
+Attempt 6: HTTP 429
+```
+*(The 6th attempt is throttled with HTTP `429 Too Many Requests`)*.
+
+##### 6.3 Extension (a): Server-Sent Events (SSE) Live Stream
+```bash
+curl -N "http://localhost:5000/api/stream?device=pi-01"
+```
+**Expected Output:**
+```text
+data: {"device": "pi-01", "humidity_percent": 53.07, "recorded_at": "2026-11-04T09:43:33.066Z", "temperature_c": 35.28, "age_s": 5.2}
+```
+*(Pushes new readings in real-time as they are written to MariaDB)*.
