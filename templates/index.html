@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IoT Dashboard - {{ device }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #f3f5f7; color: #202833; }
+    main { max-width: 960px; margin: auto; padding: 16px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+    .card { background: #fff; border-radius: 8px; padding: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    .big { font-size: 28px; font-weight: bold; }
+    .banner { display: none; padding: 10px; border-radius: 6px; margin: 10px 0; font-weight: 500; }
+    .warn { background: #fde8e8; color: #9b1c1c; border-left: 4px solid #c81e1e; }
+    .stale { background: #fff4d6; color: #7a5b00; border-left: 4px solid #f59e0b; }
+    .err { background: #e4e4e4; color: #1f2937; border-left: 4px solid #6b7280; }
+    canvas { max-height: 320px; }
+    input[type="password"] { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; margin-right: 6px; }
+    button { padding: 6px 12px; border: none; border-radius: 4px; background: #2563eb; color: #fff; cursor: pointer; font-weight: bold; }
+    button:hover { background: #1d4ed8; }
+    button:active { background: #1e40af; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>IoT Sensor Dashboard</h1>
+    <p>Device: <strong>{{ device }}</strong> | Status: <span id="status">loading</span></p>
+
+    <div id="warn" class="banner warn"></div>
+    <div id="stale" class="banner stale"></div>
+    <div id="err" class="banner err"></div>
+
+    <div class="grid">
+      <div class="card">
+        Temperature
+        <div class="big"><span id="t">-</span> &deg;C</div>
+      </div>
+      <div class="card">
+        Humidity
+        <div class="big"><span id="h">-</span> %</div>
+      </div>
+      <div class="card">
+        Last 60 minutes
+        <div>average: <span id="avg">-</span> &deg;C</div>
+        <div>min / max: <span id="mm">-</span></div>
+      </div>
+    </div>
+
+    <!-- Part 3: Actuator LED control card -->
+    <div class="card" style="margin-top: 12px">
+      <strong>LED control:</strong> <span id="led">unknown</span><br><br>
+      <input id="token" type="password" placeholder="control token" autocomplete="off">
+      <button onclick="setLed('on')">ON</button>
+      <button onclick="setLed('off')">OFF</button>
+    </div>
+
+    <div class="card" style="margin-top: 12px">
+      <canvas id="chart"></canvas>
+    </div>
+  </main>
+
+  <script src="{{ url_for('static', filename='chart.umd.js') }}"></script>
+  <script>
+    const DEVICE = {{ device|tojson }};
+    const LIMIT_C = 30, REFRESH_MS = 5000, STALE_S = 30;
+    const $ = id => document.getElementById(id);
+
+    const chart = new Chart($("chart"), {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [
+          { label: "Temperature (C)", data: [], borderWidth: 2, pointRadius: 0, borderColor: "#ef4444", tension: 0.1 },
+          { label: "Humidity (%)", data: [], borderWidth: 2, pointRadius: 0, borderColor: "#3b82f6", yAxisID: "y2", tension: 0.1 }
+        ]
+      },
+      options: {
+        animation: false,
+        responsive: true,
+        scales: {
+          y: { title: { display: true, text: "Temperature (C)" } },
+          y2: {
+            position: "right",
+            title: { display: true, text: "Humidity (%)" },
+            grid: { drawOnChartArea: false }
+          }
+        }
+      }
+    });
+
+    function banner(id, msg) {
+      const e = $(id);
+      e.textContent = msg || "";
+      e.style.display = msg ? "block" : "none";
+    }
+
+    async function getJSON(url) {
+      const r = await fetch(url, { cache: "no-store" });
+      if (!r.ok) throw new Error(url.split("?")[0] + " returned HTTP " + r.status);
+      return r.json();
+    }
+
+    async function checkLedStatus() {
+      try {
+        const j = await getJSON("/api/led");
+        $("led").textContent = j.state;
+      } catch (e) {
+        // Disabled or unavailable
+      }
+    }
+
+    async function refresh() {
+      const q = "device=" + encodeURIComponent(DEVICE);
+      try {
+        const [latest, stats, rows] = await Promise.all([
+          getJSON("/api/latest?" + q),
+          getJSON("/api/stats?minutes=60&" + q),
+          getJSON("/api/readings?limit=120&" + q)
+        ]);
+
+        $("t").textContent = latest.temperature_c.toFixed(1);
+        $("h").textContent = latest.humidity_percent.toFixed(1);
+        $("avg").textContent = stats.avg_temperature_c === null ? "-" : stats.avg_temperature_c.toFixed(1);
+        $("mm").textContent = stats.n ? (stats.min_temperature_c.toFixed(1) + " / " + stats.max_temperature_c.toFixed(1)) : "-";
+
+        banner("warn", latest.temperature_c > LIMIT_C ? "WARNING: temperature above " + LIMIT_C + " C" : "");
+        banner("stale", latest.age_s > STALE_S ? "Data is stale: last reading " + Math.round(latest.age_s) + " s ago" : "");
+
+        chart.data.labels = rows.map(r => r.recorded_at.slice(11, 19));
+        chart.data.datasets[0].data = rows.map(r => r.temperature_c);
+        chart.data.datasets[1].data = rows.map(r => r.humidity_percent);
+        chart.update();
+
+        banner("err", "");
+        $("status").textContent = "updated " + new Date().toLocaleTimeString();
+      } catch (e) {
+        banner("err", "Cannot update: " + e.message);
+        $("status").textContent = "offline";
+      }
+    }
+
+    async function setLed(state) {
+      try {
+        const r = await fetch("/api/led", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + $("token").value
+          },
+          body: JSON.stringify({ state: state })
+        });
+        const j = await r.json();
+        $("led").textContent = r.ok ? j.state : "error: " + (j.error || r.statusText);
+      } catch (e) {
+        $("led").textContent = "error: " + e.message;
+      }
+    }
+
+    checkLedStatus();
+    refresh();
+    setInterval(refresh, REFRESH_MS);
+  </script>
+</body>
+</html>

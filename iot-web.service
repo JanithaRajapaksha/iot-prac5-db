@@ -1,0 +1,13 @@
+[Unit]
+Description=IoT web dashboard
+After=network.target mariadb.service
+
+[Service]
+User=kuru-kuru
+WorkingDirectory=/home/kuru-kuru/iot-prac5-db
+EnvironmentFile=/home/kuru-kuru/iot-prac5-db/web.env
+ExecStart=/home/kuru-kuru/.local/bin/gunicorn --workers 1 --threads 4 --bind 0.0.0.0:8000 app:app
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
